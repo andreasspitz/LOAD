@@ -2,7 +2,6 @@ package externalsort;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -12,13 +11,11 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.PriorityQueue;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * Sorts a file externally on disk by using merge-sort
@@ -35,7 +32,6 @@ public class ParallelDiskMergeSort {
     private long totalLinesInFile;
     private int maxLinesPerTmpFile;
     private int writeBufferSize;
-    private int nThreads;
     private Comparator<String> stringComparator;
     
     Comparator<FileBuffer> fileComparator = new Comparator<FileBuffer>() {
@@ -53,11 +49,10 @@ public class ParallelDiskMergeSort {
     };
     
     public ParallelDiskMergeSort(long totalLines, int maxLinesPerTmpFile, int writeBufferSize,
-                                 int nThreads, Comparator<String> stringComparator) {
+                                 Comparator<String> stringComparator) {
         this.totalLinesInFile = totalLines;
         this.maxLinesPerTmpFile = maxLinesPerTmpFile;
         this.writeBufferSize = writeBufferSize;
-        this.nThreads = nThreads;
         this.stringComparator = stringComparator;
     }
     
@@ -131,27 +126,9 @@ public class ParallelDiskMergeSort {
      *                     default location)
      * @throws IOException
      */
-    private File sortAndSave(List<LinkedList<String>> tmplists, File tmpdirectory) throws IOException {
+    private File sortAndSave(String[] fileContent, File tmpdirectory) throws IOException {
         
-        CountDownLatch latch = new CountDownLatch(nThreads);
-        
-        ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newCachedThreadPool();
-        for (int i=0; i<nThreads; i++) {
-            SortingThreadWorker w = new SortingThreadWorker(tmplists.get(i), stringComparator, latch);
-            executor.execute(w);
-        }
-        executor.shutdown();
-        
-        // wait for termination
-        while (true) {
-            try {
-                latch.await();
-                break;
-            } catch (InterruptedException e) {
-                System.out.println();
-                System.out.println("Waiting was interrupted (sorting)");
-            }
-        }
+        Arrays.parallelSort(fileContent, stringComparator);
         
         // create a new temporary file and set it to delete itself after use
         File newtmpfile = File.createTempFile("sortInBatch", "flatfile", tmpdirectory);
@@ -161,33 +138,11 @@ public class ParallelDiskMergeSort {
         OutputStream out = new FileOutputStream(newtmpfile);
         BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(out, "UTF-8"), writeBufferSize);
         
-        // create priority queue for keeping lists sorted by their top most string
-        PriorityQueue<LinkedList<String>> pq = new PriorityQueue<LinkedList<String>>(11, listComparator);
-
-        // add temporary input file buffers to priority queue
-        for (LinkedList<String> l : tmplists) {
-            if (!l.isEmpty()) {
-                pq.add(l);
-            }
+        for (String s : fileContent) {
+            bw.write(s);
+            bw.newLine();
         }
-
-        // while there are still lists that contain strings (lines), pop the lines and add them to output file
-        try {
-              while (pq.size() > 0) {
-                  LinkedList<String> l = pq.poll();
-                String r = l.pop();
-                bw.write(r);
-                bw.newLine();
-                
-                if (!l.isEmpty()) {
-                      pq.add(l);
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-               bw.close();
-        }
+        bw.close();
         
         return newtmpfile;
     }
@@ -201,50 +156,52 @@ public class ParallelDiskMergeSort {
      */
     private List<File> sortInBatch(final BufferedReader fbr, final File tmpdirectory) throws IOException {
         
-        // compute number of required temporary files
         int nFiles = (int) Math.ceil((double) totalLinesInFile / (double) maxLinesPerTmpFile);
+        long remainingLines = totalLinesInFile;
+        int arrayLength = maxLinesPerTmpFile;
         
         // create a list for temporary files for splitting the main file
         List<File> files = new ArrayList<File>();
 
         // read the file, split it into temporary files and sort them
         try {
-            List<LinkedList<String>> tmplists = new ArrayList<LinkedList<String>>(nThreads);
-            for (int i=0; i<nThreads; i++) {
-                tmplists.add(new LinkedList<String>());
-            }
             
             String line = "";
             int currentfile = 0;
             try {
-                while (line != null) {
+                while (remainingLines > 0) {
+                    
+                    if (arrayLength > remainingLines) {
+                        arrayLength = (int) remainingLines;
+                        remainingLines = 0;
+                    } else {
+                        remainingLines = remainingLines - arrayLength;
+                    }
+                    String[] fileContent = new String[arrayLength];
                     
                     currentfile++;
                     System.out.print("\rWorking on temporary file " + currentfile + "/" + nFiles + " (reading)     ");    
                     
                     int lineCount = 0;
-                    while ((lineCount < maxLinesPerTmpFile) && ((line = fbr.readLine()) != null)) {
-                        tmplists.get(lineCount % nThreads).add(line);
+                    while ((lineCount < arrayLength)) {
+                        line = fbr.readLine();
+                        fileContent[lineCount] = line;
                         lineCount++;
                     }
                     
                     System.out.print("\rWorking on temporary file " + currentfile + "/" + nFiles + " (sorting)     ");
                     
-                    files.add(sortAndSave(tmplists, tmpdirectory));
-                    for (int i=0; i<nThreads; i++) {
-                        tmplists.get(i).clear();
-                    }
+                    files.add(sortAndSave(fileContent, tmpdirectory));
                 }
-            } catch (EOFException oef) {
-                if (tmplists.get(0).size() > 0) {
-                    System.out.print("\rWorking on temporary file " + currentfile + "/" + nFiles + " (sorting)     ");
-                    files.add(sortAndSave(tmplists, tmpdirectory));
-                }
+                
+            } catch (Exception e) {
+                e.printStackTrace();
             }
         } finally {
             fbr.close();
             System.out.println();
         }
+        
         return files;
     }
     

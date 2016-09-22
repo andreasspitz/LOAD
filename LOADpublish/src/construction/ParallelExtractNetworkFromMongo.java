@@ -392,7 +392,7 @@ public class ParallelExtractNetworkFromMongo {
         int nLinesPerFile = (int) Math.ceil((double) count_unaggregatedEdges / (double) maxTempFiles);
         
         // initialize sorter
-        ParallelDiskMergeSort dms = new ParallelDiskMergeSort(count_unaggregatedEdges, nLinesPerFile, bufferSize, nThreads, edgecomparator);
+        ParallelDiskMergeSort dms = new ParallelDiskMergeSort(count_unaggregatedEdges, nLinesPerFile, bufferSize, edgecomparator);
         
         // make sure that the temporary folder exists
         File tempFileStore = new File(tmpSortingDirectory);
@@ -539,7 +539,7 @@ public class ParallelExtractNetworkFromMongo {
             int nLinesPerFile = (int) Math.ceil((double) aggregatedEdgeCounts[i] / (double) maxTempFiles);
             
             // initialize sorter
-            ParallelDiskMergeSort dms = new ParallelDiskMergeSort(aggregatedEdgeCounts[i], nLinesPerFile, bufferSize, nThreads, edgecomparator);
+            ParallelDiskMergeSort dms = new ParallelDiskMergeSort(aggregatedEdgeCounts[i], nLinesPerFile, bufferSize, edgecomparator);
             
             String inputfile = tmpfolder + "tmp_" + edgeFileNames[i];
             String outputfile = tmpfolder + "tmp_sorted_" + edgeFileNames[i];
